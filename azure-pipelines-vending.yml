@@ -70,8 +70,6 @@ stages:
     jobs:
       - job: Vend
         displayName: 'Create TFC Workspaces'
-        variables:
-          - group: $(APP_ID)-secrets
         steps:
           - task: TerraformInstaller@1
             inputs:
