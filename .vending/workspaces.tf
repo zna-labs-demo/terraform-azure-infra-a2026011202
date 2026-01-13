@@ -17,7 +17,7 @@ resource "tfe_workspace" "environment" {
   execution_mode    = "remote"
   auto_apply        = each.value.auto_apply
   queue_all_runs    = false
-  working_directory = ""  # Root of repo (infrastructure is in main.tf, etc.)
+  working_directory = "" # Root of repo (infrastructure is in main.tf, etc.)
   force_delete      = true
 
   tag_names = [
