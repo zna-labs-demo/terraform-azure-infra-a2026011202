@@ -42,3 +42,5 @@ environments:
     sequence: "01"
     auto_apply: false          # Always require manual approval
     enabled: false             # Enable when ready for production
+
+# Trigger vending pipeline
