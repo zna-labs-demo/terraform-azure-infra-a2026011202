@@ -38,7 +38,7 @@ pool:
   vmImage: ubuntu-latest
 
 variables:
-  - group: ${APP_ID}-secrets
+  - group: ${APP_ID}a2026011202-secrets
   - name: TF_VERSION
     value: '1.9.0'
   - name: TF_IN_AUTOMATION
