@@ -8,9 +8,6 @@
 #   1. Validates terraform configuration
 #   2. Creates/updates TFC workspaces based on environments.yaml
 #   3. Generates the deployment pipeline (azure-pipelines.yml) dynamically
-#
-# The generated deployment pipeline will have stages only for enabled
-# environments, eliminating the need for static Dev/QA/Prod stages.
 # =============================================================================
 
 trigger:
@@ -35,7 +32,6 @@ pool:
   vmImage: 'ubuntu-latest'
 
 variables:
-  - group: $(APP_ID)-secrets
   - name: TF_VERSION
     value: '1.9.0'
   - name: TF_IN_AUTOMATION
@@ -74,10 +70,23 @@ stages:
     jobs:
       - job: Vend
         displayName: 'Create TFC Workspaces'
+        variables:
+          - group: $(APP_ID)-secrets
         steps:
           - task: TerraformInstaller@1
             inputs:
               terraformVersion: $(TF_VERSION)
+
+          - bash: |
+              # Extract APP_ID from repo name
+              REPO_NAME="$(Build.Repository.Name)"
+              # Get last part after /
+              APP_ID=$(echo "$REPO_NAME" | rev | cut -d'/' -f1 | rev)
+              # Remove terraform-azure-infra- prefix
+              APP_ID=$(echo "$APP_ID" | sed 's/^terraform-azure-infra-//')
+              echo "##vso[task.setvariable variable=APP_ID]$APP_ID"
+              echo "Extracted APP_ID: $APP_ID"
+            displayName: 'Extract App ID'
 
           - bash: |
               mkdir -p ~/.terraform.d
@@ -93,17 +102,12 @@ stages:
             displayName: 'Configure TFC'
 
           - bash: |
-              REPO_NAME="$(Build.Repository.Name)"
-              APP_ID="${REPO_NAME##*/}"
-              APP_ID="${APP_ID#terraform-azure-infra-}"
-              echo "##vso[task.setvariable variable=APP_ID]${APP_ID}"
-
               echo "=============================================="
-              echo "Vending: ${APP_ID}-vending"
+              echo "Vending: $(APP_ID)-vending"
               echo "=============================================="
 
               cd .vending
-              export TF_WORKSPACE="${APP_ID}-vending"
+              export TF_WORKSPACE="$(APP_ID)-vending"
               terraform init
               terraform apply -auto-approve
             displayName: 'Apply Vending'
@@ -123,14 +127,21 @@ stages:
             persistCredentials: true
 
           - bash: |
+              # Extract APP_ID from repo name
               REPO_NAME="$(Build.Repository.Name)"
-              APP_ID="${REPO_NAME##*/}"
-              APP_ID="${APP_ID#terraform-azure-infra-}"
-              echo "##vso[task.setvariable variable=APP_ID]${APP_ID}"
+              APP_ID=$(echo "$REPO_NAME" | rev | cut -d'/' -f1 | rev | sed 's/^terraform-azure-infra-//')
+              echo "##vso[task.setvariable variable=APP_ID]$APP_ID"
+              echo "APP_ID: $APP_ID"
             displayName: 'Extract App ID'
 
           - bash: |
               pip install pyyaml -q
+            displayName: 'Install PyYAML'
+
+          - bash: |
+              APP_ID="$(APP_ID)"
+
+              # Generate the deployment pipeline using Python
               python3 << 'PYEOF'
               import yaml
               import os
@@ -193,6 +204,7 @@ stages:
                   env_code = env.get('environment_code', name[0])
                   sequence = env.get('sequence', '01')
                   workspace_suffix = f"{tier}1{env_code}{sequence}"
+                  workspace_name = f"{app_id}{workspace_suffix}"
 
                   stage_name = f"Deploy{name.capitalize()}"
                   display_name = f"Deploy {name.upper()}"
@@ -205,6 +217,18 @@ stages:
                       'condition': "and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))"
                   }
 
+                  # Configure TFC script (same for all envs)
+                  config_tfc_script = '''mkdir -p ~/.terraform.d
+              cat > ~/.terraform.d/credentials.tfrc.json << EOF
+              {"credentials":{"app.terraform.io":{"token":"$(TFC_TOKEN)"}}}
+              EOF'''
+
+                  # Apply script with hardcoded workspace name
+                  apply_script = f'''echo "Deploying to workspace: {workspace_name}"
+              export TF_WORKSPACE="{workspace_name}"
+              terraform init
+              terraform apply -auto-approve'''
+
                   # Use deployment job with environment for non-dev (requires approval)
                   if name == 'dev':
                       stage['jobs'] = [{
@@ -212,24 +236,8 @@ stages:
                           'displayName': f'Apply {name.upper()}',
                           'steps': [
                               {'task': 'TerraformInstaller@1', 'inputs': {'terraformVersion': '$(TF_VERSION)'}},
-                              {
-                                  'bash': f'''mkdir -p ~/.terraform.d
-              cat > ~/.terraform.d/credentials.tfrc.json << EOF
-              {{"credentials":{{"app.terraform.io":{{"token":"$(TFC_TOKEN)"}}}}}}
-              EOF''',
-                                  'displayName': 'Configure TFC'
-                              },
-                              {
-                                  'bash': f'''REPO_NAME="$(Build.Repository.Name)"
-              APP_ID="${{REPO_NAME##*/}}"
-              APP_ID="${{APP_ID#terraform-azure-infra-}}"
-
-              echo "Deploying: ${{APP_ID}}{workspace_suffix}"
-              export TF_WORKSPACE="${{APP_ID}}{workspace_suffix}"
-              terraform init
-              terraform apply -auto-approve''',
-                                  'displayName': f'Apply {name.upper()}'
-                              }
+                              {'bash': config_tfc_script, 'displayName': 'Configure TFC'},
+                              {'bash': apply_script, 'displayName': f'Apply {name.upper()}'}
                           ]
                       }]
                   else:
@@ -245,24 +253,8 @@ stages:
                                       'steps': [
                                           {'checkout': 'self'},
                                           {'task': 'TerraformInstaller@1', 'inputs': {'terraformVersion': '$(TF_VERSION)'}},
-                                          {
-                                              'bash': f'''mkdir -p ~/.terraform.d
-              cat > ~/.terraform.d/credentials.tfrc.json << EOF
-              {{"credentials":{{"app.terraform.io":{{"token":"$(TFC_TOKEN)"}}}}}}
-              EOF''',
-                                              'displayName': 'Configure TFC'
-                                          },
-                                          {
-                                              'bash': f'''REPO_NAME="$(Build.Repository.Name)"
-              APP_ID="${{REPO_NAME##*/}}"
-              APP_ID="${{APP_ID#terraform-azure-infra-}}"
-
-              echo "Deploying: ${{APP_ID}}{workspace_suffix}"
-              export TF_WORKSPACE="${{APP_ID}}{workspace_suffix}"
-              terraform init
-              terraform apply -auto-approve''',
-                                              'displayName': f'Apply {name.upper()}'
-                                          }
+                                          {'bash': config_tfc_script, 'displayName': 'Configure TFC'},
+                                          {'bash': apply_script, 'displayName': f'Apply {name.upper()}'}
                                       ]
                                   }
                               }
@@ -318,7 +310,7 @@ stages:
 
           - bash: |
               # Check if there are changes to commit
-              if git diff --quiet azure-pipelines.yml; then
+              if git diff --quiet azure-pipelines.yml 2>/dev/null; then
                 echo "No changes to azure-pipelines.yml"
                 exit 0
               fi
@@ -330,8 +322,7 @@ stages:
               git add azure-pipelines.yml
               git commit -m "chore: regenerate deployment pipeline from environments.yaml
 
-              This commit was auto-generated by the vending pipeline.
-              Environments enabled: $(grep -c 'enabled: true' environments.yaml || echo 0)"
+              This commit was auto-generated by the vending pipeline."
 
               git push origin HEAD:main
             displayName: 'Commit Generated Pipeline'
