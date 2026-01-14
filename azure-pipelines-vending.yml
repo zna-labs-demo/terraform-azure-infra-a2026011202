@@ -216,10 +216,9 @@ stages:
                   }
 
                   # Configure TFC script (same for all envs)
+                  # Use env var expansion to avoid GitHub secret scanning false positives
                   config_tfc_script = '''mkdir -p ~/.terraform.d
-              cat > ~/.terraform.d/credentials.tfrc.json << EOF
-              {"credentials":{"app.terraform.io":{"token":"$(TFC_TOKEN)"}}}
-              EOF'''
+              echo "{\"credentials\":{\"app.terraform.io\":{\"token\":\"$TFC_TOKEN\"}}}" > ~/.terraform.d/credentials.tfrc.json'''
 
                   # Apply script with hardcoded workspace name
                   apply_script = f'''echo "Deploying to workspace: {workspace_name}"
