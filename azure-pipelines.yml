@@ -11,90 +11,100 @@
 trigger:
   branches:
     include:
-      - main
+    - main
   paths:
     include:
-      - '*.tf'
-      - modules/**
+    - '*.tf'
+    - modules/**
     exclude:
-      - .vending/**
-      - environments.yaml
-      - '*.md'
-      - docs/**
-
+    - .vending/**
+    - environments.yaml
+    - '*.md'
+    - docs/**
 pr:
   branches:
     include:
-      - main
+    - main
   paths:
     include:
-      - '*.tf'
-      - modules/**
+    - '*.tf'
+    - modules/**
     exclude:
-      - .vending/**
-      - environments.yaml
-
+    - .vending/**
+    - environments.yaml
 pool:
   vmImage: ubuntu-latest
-
 variables:
-  - group: ${APP_ID}a2026011202-secrets
-  - name: TF_VERSION
-    value: '1.9.0'
-  - name: TF_IN_AUTOMATION
-    value: 'true'
-
+- group: a2026011202-secrets
+- name: TF_VERSION
+  value: 1.9.0
+- name: TF_IN_AUTOMATION
+  value: 'true'
 stages:
-  # ===========================================================================
-  # Quality Gates
-  # ===========================================================================
-  - stage: QualityGates
-    displayName: Quality Gates
-    jobs:
-      - job: Validate
-        displayName: Format & Validate
-        steps:
+- stage: QualityGates
+  displayName: Quality Gates
+  jobs:
+  - job: Validate
+    displayName: Format & Validate
+    steps:
+    - task: TerraformInstaller@1
+      inputs:
+        terraformVersion: 1.9.0
+    - script: terraform fmt -check -recursive -diff
+      displayName: Terraform Format
+    - script: 'terraform init -backend=false
+
+        terraform validate'
+      displayName: Terraform Validate
+- stage: DeployDev
+  displayName: Deploy DEV
+  dependsOn: QualityGates
+  condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
+  jobs:
+  - job: Dev
+    displayName: Apply DEV
+    steps:
+    - task: TerraformInstaller@1
+      inputs:
+        terraformVersion: 1.9.0
+    - bash: 'mkdir -p ~/.terraform.d
+
+        echo "{"credentials":{"app.terraform.io":{"token":"$TFC_TOKEN"}}}" > ~/.terraform.d/credentials.tfrc.json'
+      displayName: Configure TFC
+    - bash: 'echo "Deploying to workspace: a2026011202n1d01"
+
+        export TF_WORKSPACE="a2026011202n1d01"
+
+        terraform init
+
+        terraform apply -auto-approve'
+      displayName: Apply DEV
+- stage: DeployQa
+  displayName: Deploy QA
+  dependsOn: DeployDev
+  condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
+  jobs:
+  - deployment: Qa
+    displayName: Apply QA
+    environment: QA
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - checkout: self
           - task: TerraformInstaller@1
             inputs:
-              terraformVersion: $(TF_VERSION)
+              terraformVersion: 1.9.0
+          - bash: 'mkdir -p ~/.terraform.d
 
-          - script: terraform fmt -check -recursive -diff
-            displayName: Terraform Format
-
-          - script: |
-              terraform init -backend=false
-              terraform validate
-            displayName: Terraform Validate
-
-  # ===========================================================================
-  # Deploy Dev (enabled by default)
-  # ===========================================================================
-  - stage: DeployDev
-    displayName: Deploy DEV
-    dependsOn: QualityGates
-    condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
-    jobs:
-      - job: Dev
-        displayName: Apply DEV
-        steps:
-          - task: TerraformInstaller@1
-            inputs:
-              terraformVersion: $(TF_VERSION)
-
-          - bash: |
-              mkdir -p ~/.terraform.d
-              cat > ~/.terraform.d/credentials.tfrc.json << EOF
-              {"credentials":{"app.terraform.io":{"token":"$(TFC_TOKEN)"}}}
-              EOF
+              echo "{"credentials":{"app.terraform.io":{"token":"$TFC_TOKEN"}}}" >
+              ~/.terraform.d/credentials.tfrc.json'
             displayName: Configure TFC
+          - bash: 'echo "Deploying to workspace: a2026011202n1q01"
 
-          - bash: |
-              REPO_NAME="$(Build.Repository.Name)"
-              APP_ID="${REPO_NAME##*/}"
-              APP_ID="${APP_ID#terraform-azure-infra-}"
+              export TF_WORKSPACE="a2026011202n1q01"
 
-              echo "Deploying: ${APP_ID}n1d01"
-              export TF_WORKSPACE="${APP_ID}n1d01"
               terraform init
-              terraform apply -auto-approve
-            displayName: Apply DEV
+
+              terraform apply -auto-approve'
+            displayName: Apply QA
